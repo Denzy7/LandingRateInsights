@@ -8,6 +8,32 @@ Tabs: Overview · Progress · Aircraft · Technique · Sessions · Landings · L
 point for details and click it to open that landing. In live mode the dashboard refreshes as
 soon as the Lua script logs a new landing.
 
+## Download and run
+
+Get a file from the [latest release](../../releases/latest). Each file is the program itself, not a zip.
+
+**Not sure which?** Use the first two. They work without installing anything.
+
+| You have | Download | How to run |
+|---|---|---|
+| Windows | `LandingRateInsights-x.y.z-win64.exe` | Double-click it. Windows SmartScreen may warn about an unsigned app: *More info ▸ Run anyway*. |
+| Linux | `LandingRateInsights-x.y.z-linux64` | `chmod +x LandingRateInsights-*-linux64 && ./LandingRateInsights-*-linux64` |
+| Linux, with PySide6 already installed | `LandingRateInsights-x.y.z-linux-system` (~40 KB) | `chmod +x` it, then run it. It uses your distro's Python and Qt (packages below). |
+| Windows, with Python already installed | `LandingRateInsights-x.y.z-win-system.pyz` (~40 KB) | `py -m pip install PySide6 pandas numpy matplotlib` once, then double-click the file or run `py LandingRateInsights-x.y.z-win-system.pyz`. A console window stays open next to the app. |
+
+The two bundled builds (`win64`, `linux64`) are large, about 85–120 MB, and take a few seconds to
+start because they unpack themselves on launch. The `-system` builds are tiny and start
+instantly, but they need these packages:
+
+* Arch: `pacman -S pyside6 qt6-svg python-pandas python-matplotlib`
+* Debian 13 / Ubuntu 25.10+: `apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib`
+* Windows or anything else: `pip install -r requirements.txt`, or the `pip` line above
+
+If something is missing, the `-system` build says which package to install.
+
+Any build also takes a log path, the `report` subcommand, `--version` and `--self-test`:
+`./LandingRateInsights-x.y.z-linux64 ~/X-Plane\ 11/LandingRate.log`
+
 ## Run from source
 
 ```sh
@@ -20,26 +46,36 @@ With no path given, it opens the last log you used, then `$LANDINGRATE_LOG`, the
 `LandingRate.log` in the current folder (or next to the executable). The logbook is picked up
 from `Output/logbooks/` next to the log, or you can choose one with *File ▸ Open logbook…*.
 
-## Builds
+## Builds and releases
 
-One CI run (`.github/workflows/build.yml`) builds four files. Each one is uploaded as the file
-itself, not a zip:
+`.github/workflows/build.yml` runs on every push and pull request:
 
-| File | Contains | Needs on the machine |
-|---|---|---|
-| `LandingRateInsights-x.y.z-win64.exe` | Python, Qt/PySide6, pandas, numpy, matplotlib | nothing |
-| `LandingRateInsights-x.y.z-linux64` | the same, for Linux | nothing |
-| `LandingRateInsights-x.y.z-linux-system` (~40 KB) | only this app's code | Python ≥ 3.10 with PySide6, pandas, numpy, matplotlib |
-| `LandingRateInsights-x.y.z-win-system.pyz` (~40 KB) | only this app's code | the same, on Windows |
+1. **test**: pyflakes and pytest on Linux and Windows.
+2. **build-bundled**: PyInstaller one-file builds, `win64.exe` and `linux64`. The Linux one is built
+   on Ubuntu 22.04 for an older glibc, so it also runs on older distros. Each build runs its own
+   `--self-test`.
+3. **build-system**: the zipapp, as `linux-system` and `win-system.pyz`. The Windows one is
+   self-tested against pip-installed libraries.
+4. **test-system**: runs the `linux-system` build and the test suite inside Arch and Debian 13
+   containers, against their packaged PySide6. No pip.
+5. **release**: only for tags. Attaches all four files to the GitHub Release.
 
-System packages for the `-system` builds:
+Each run's four files are also on its Actions page (*Artifacts*). They upload as plain files,
+not zips.
 
-* Arch: `pacman -S pyside6 qt6-svg python-pandas python-matplotlib`
-* Debian 13 / Ubuntu 25.10+: `apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib`
-* Windows or anything else: `pip install -r requirements.txt`, then `py LandingRateInsights-x.y.z-win-system.pyz`
+**To publish a release:**
 
-On Linux, `chmod +x` the downloaded file and run it. To publish a release, push a `vX.Y.Z` tag.
-The run stamps that version into the build and attaches all four files to the GitHub Release.
+```sh
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+The tag's run writes `1.2.0` into `landingrate/__init__.py` for the build, so file names and
+`--version` match the tag. When all jobs pass, it creates the *v1.2.0* release with the four
+files. The version in the repo stays as committed. Bump `__version__` there too if you want
+source checkouts to report the new version. If a job fails, no release is published. Fix it,
+then delete and re-push the tag:
+`git tag -d v1.2.0 && git push origin :v1.2.0`.
 
 Local builds:
 
