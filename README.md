@@ -22,21 +22,24 @@ from `Output/logbooks/` next to the log, or you can choose one with *File ▸ Op
 
 ## Builds
 
-CI produces two kinds of build (see `.github/workflows/`):
+One CI run (`.github/workflows/build.yml`) builds four files. Each one is uploaded as the file
+itself, not a zip:
 
-| Workflow | File | Contains | Needs on the machine |
-|---|---|---|---|
-| `build-bundled.yml` | `LandingRateInsights-x.y.z-win64.exe`, `…-linux64` | Python, Qt/PySide6, pandas, numpy, matplotlib | nothing |
-| `build-system.yml` | `LandingRateInsights-x.y.z-system.pyz` (~40 KB) | only this app's code | Python ≥ 3.10 with PySide6, pandas, numpy, matplotlib |
+| File | Contains | Needs on the machine |
+|---|---|---|
+| `LandingRateInsights-x.y.z-win64.exe` | Python, Qt/PySide6, pandas, numpy, matplotlib | nothing |
+| `LandingRateInsights-x.y.z-linux64` | the same, for Linux | nothing |
+| `LandingRateInsights-x.y.z-linux-system` (~40 KB) | only this app's code | Python ≥ 3.10 with PySide6, pandas, numpy, matplotlib |
+| `LandingRateInsights-x.y.z-win-system.pyz` (~40 KB) | only this app's code | the same, on Windows |
 
-System packages for the `.pyz`:
+System packages for the `-system` builds:
 
 * Arch: `pacman -S pyside6 qt6-svg python-pandas python-matplotlib`
 * Debian 13 / Ubuntu 25.10+: `apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib`
-* Windows or anything else: `pip install -r requirements.txt`, then `py LandingRateInsights-x.y.z-system.pyz`
+* Windows or anything else: `pip install -r requirements.txt`, then `py LandingRateInsights-x.y.z-win-system.pyz`
 
-On Linux the `.pyz` runs directly: `chmod +x` it and launch it. To publish a release, push a
-`vX.Y.Z` tag. Both workflows stamp the version from the tag and attach their files to the release.
+On Linux, `chmod +x` the downloaded file and run it. To publish a release, push a `vX.Y.Z` tag.
+The run stamps that version into the build and attaches all four files to the GitHub Release.
 
 Local builds:
 
