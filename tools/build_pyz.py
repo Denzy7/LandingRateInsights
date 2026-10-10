@@ -1,7 +1,7 @@
 """Build the system-libs version: a single executable zipapp of the landingrate package only.
 
 It runs on the machine's own Python 3.10+ and uses the installed PySide6/Qt, pandas, numpy and
-matplotlib (Arch: pacman -S pyside6 python-pandas python-matplotlib; Debian/Ubuntu 25.10+:
+matplotlib (Arch: pacman -S pyside6 qt6-svg python-pandas python-matplotlib; Debian/Ubuntu 25.10+:
 apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib; anywhere: pip install
 -r requirements.txt). On Linux it is directly executable; on Windows run it with `py file.pyz`.
 
@@ -26,6 +26,11 @@ try:
 except ImportError as e:
     sys.exit(f"Missing dependency: {e.name}. Install PySide6, pandas, numpy and matplotlib "
              "with your package manager (or: pip install PySide6 pandas numpy matplotlib).")
+try:
+    from PySide6 import QtSvg  # noqa: F401  (matplotlib's Qt backend needs it)
+except ImportError as e:
+    sys.exit(f"Qt SVG support is missing ({e}). Arch: pacman -S qt6-svg; "
+             "Debian/Ubuntu: apt install python3-pyside6.qtsvg")
 from landingrate.app import main
 
 sys.exit(main())

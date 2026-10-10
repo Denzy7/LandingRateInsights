@@ -1,7 +1,7 @@
 name: system-libs build (uses installed python, qt and pyside6)
 # A single small executable zipapp (.pyz) containing only this app's code. It runs on the
 # machine's own Python and imports the PySide6/Qt, pandas, numpy and matplotlib installed there:
-#   Arch:            pacman -S pyside6 python-pandas python-matplotlib
+#   Arch:            pacman -S pyside6 qt6-svg python-pandas python-matplotlib
 #   Debian 13+:      apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib
 #   Windows / other: pip install -r requirements.txt, then: py LandingRateInsights-x.y.z.pyz
 on:
@@ -63,7 +63,7 @@ jobs:
         include:
           - name: arch
             image: archlinux:latest
-            install: pacman -Syu --noconfirm python pyside6 python-pandas python-numpy python-matplotlib python-pytest
+            install: pacman -Syu --noconfirm python pyside6 qt6-svg python-pandas python-numpy python-matplotlib python-pytest
           - name: debian-13
             image: debian:trixie
             install: >-

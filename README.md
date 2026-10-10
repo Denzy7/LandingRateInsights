@@ -31,7 +31,7 @@ CI produces two kinds of build (see `.github/workflows/`):
 
 System packages for the `.pyz`:
 
-* Arch: `pacman -S pyside6 python-pandas python-matplotlib`
+* Arch: `pacman -S pyside6 qt6-svg python-pandas python-matplotlib`
 * Debian 13 / Ubuntu 25.10+: `apt install python3-pyside6.qtwidgets python3-pyside6.qtsvg python3-pandas python3-matplotlib`
 * Windows or anything else: `pip install -r requirements.txt`, then `py LandingRateInsights-x.y.z-system.pyz`
 
