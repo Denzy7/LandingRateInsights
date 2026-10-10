@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.pyz
+LandingRate*.log*
+landings_export.csv
