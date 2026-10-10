@@ -31,6 +31,14 @@ instantly, but they need these packages:
 
 If something is missing, the `-system` build says which package to install.
 
+### Updates
+
+On start the app asks GitHub once for the latest release, quietly, in the background. When a
+newer one exists, the sidebar shows **· vX.Y.Z available** next to the version. Click it to open the
+release page. *Help ▸ Check for updates now* checks on demand. *Help ▸ Check for updates on start*
+turns the automatic check off. Nothing is downloaded or installed automatically. If you're
+offline, the check fails silently.
+
 Any build also takes a log path, the `report` subcommand, `--version` and `--self-test`:
 `./LandingRateInsights-x.y.z-linux64 ~/X-Plane\ 11/LandingRate.log`
 
@@ -76,6 +84,9 @@ files. The version in the repo stays as committed. Bump `__version__` there too 
 source checkouts to report the new version. If a job fails, no release is published. Fix it,
 then delete and re-push the tag:
 `git tag -d v1.2.0 && git push origin :v1.2.0`.
+
+The app icon is drawn by `tools/make_assets.py` (needs Pillow) into `landingrate/assets/`.
+Rerun it after changing the brand colours and commit the output.
 
 Local builds:
 

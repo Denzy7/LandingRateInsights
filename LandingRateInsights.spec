@@ -13,11 +13,15 @@ For a small build that uses the system's Python, Qt and PySide6 instead, see too
 """
 import os
 
+import sys
+
 HERE = os.path.abspath(SPECPATH)  # noqa: F821  (provided by PyInstaller)
+IS_WIN = sys.platform.startswith("win")
 
 a = Analysis(  # noqa: F821
     [os.path.join(HERE, "run_insights.py")],
     pathex=[HERE],
+    datas=[(os.path.join(HERE, "landingrate", "assets"), os.path.join("landingrate", "assets"))],
     hiddenimports=["matplotlib.backends.backend_qtagg"],
     # nothing here uses these; leaving them out keeps the file a lot smaller
     excludes=["tkinter", "matplotlib.backends.backend_tkagg", "scipy", "IPython", "pytest",
@@ -27,7 +31,8 @@ a = Analysis(  # noqa: F821
     noarchive=False,
 )
 pyz = PYZ(a.pure)  # noqa: F821
-opts = dict(name="LandingRateInsights", console=os.environ.get("LRI_CONSOLE") == "1", upx=False)
+opts = dict(name="LandingRateInsights", console=os.environ.get("LRI_CONSOLE") == "1", upx=False,
+            icon=os.path.join(HERE, "landingrate", "assets", "landingrate.ico") if IS_WIN else None)
 if os.environ.get("LRI_ONEDIR") == "1":
     exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **opts)  # noqa: F821
     coll = COLLECT(exe, a.binaries, a.datas, name="LandingRateInsights", upx=False)  # noqa: F821

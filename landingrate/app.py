@@ -30,13 +30,15 @@ os.environ.setdefault("QT_API", "pyside6")
 
 import sys
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import (QAbstractTableModel, QDate, QFileSystemWatcher, QModelIndex, QSettings,
-                            QSortFilterProxyModel, Qt, QTimer, Signal)
-from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QGuiApplication, QPalette
+from PySide6.QtCore import (QAbstractTableModel, QDate, QFileSystemWatcher, QModelIndex, QObject, QSettings,
+                            QSortFilterProxyModel, Qt, QTimer, QUrl, Signal)
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDesktopServices, QGuiApplication, QIcon,
+                           QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -51,11 +53,36 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 
-from landingrate import __version__
+from landingrate import APP_NAME, __version__
 from landingrate import analysis as lra
+from landingrate import updates
 
 # where to look for LandingRate.log / exports: next to a frozen executable, else the working dir
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
+
+
+def asset_pixmap(name: str) -> QPixmap:
+    """A bundled image; read through importlib so it also works from the .pyz and frozen builds."""
+    pm = QPixmap()
+    try:
+        pm.loadFromData(resources.files("landingrate").joinpath("assets", name).read_bytes())
+    except (OSError, FileNotFoundError):
+        pass
+    return pm
+
+
+def app_icon() -> QIcon:
+    icon = QIcon()
+    for s in (16, 32, 48, 64, 128, 256, 512):
+        pm = asset_pixmap(f"icon_{s}.png")
+        if not pm.isNull():
+            icon.addPixmap(pm)
+    return icon
+
+
+class _UpdateRelay(QObject):
+    """Carries the update check result from its worker thread to the GUI thread."""
+    done = Signal(dict, bool)
 
 
 # ----------------------------------------------------------------------
@@ -77,6 +104,7 @@ class Theme:
     serious: str = "#ec835a"
     critical: str = "#d03b3b"
     good_text: str = "#006300"
+    notice_text: str = "#9a6400"  # amber that stays readable on the light surface
 
     @property
     def rating(self):
@@ -88,7 +116,7 @@ LIGHT = Theme("light", "#fcfcfb", "#f9f9f7", "#0b0b0b", "#52514e", "#898781", "#
               ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7"))
 DARK = Theme("dark", "#1a1a19", "#0d0d0d", "#ffffff", "#c3c2b7", "#898781", "#2c2c2a", "#383835",
              ("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"),
-             good_text="#0ca30c")
+             good_text="#0ca30c", notice_text="#fab219")
 
 TARGET = (-200, -60)  # shaded "target window" on VS axes
 
@@ -133,6 +161,8 @@ def apply_qt_theme(app: QApplication, t: Theme):
         QLabel#panelSub {{ color: {t.muted}; }}
         QToolTip {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.axis}; padding: 4px; }}
         QTableView {{ gridline-color: {t.grid}; }}
+        QLabel#brandName {{ font-size: 13pt; font-weight: 600; color: {t.ink}; }}
+        QLabel#brandVersion {{ color: {t.muted}; }}
     """)
 
 
@@ -420,7 +450,8 @@ DATE_PRESETS = ["All time", "Last 7 days", "Last 30 days", "Last 90 days", "Last
 class MainWindow(QMainWindow):
     def __init__(self, path: Path | None, qs: QSettings | None = None):
         super().__init__()
-        self.setWindowTitle("Landing Rate Insights")
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(app_icon())
         self.resize(1500, 950)
         self.qs = qs or QSettings("LandingRateInsights", "dashboard")
         self.settings = lra.Settings()
@@ -448,11 +479,17 @@ class MainWindow(QMainWindow):
         # tab switch only has to show an already rendered page.
         self.prefetch_timer = QTimer(self, singleShot=True, interval=250, timeout=self._prefetch)
 
+        self.update_info = None
+        self._update_relay = _UpdateRelay(self)
+        self._update_relay.done.connect(self._show_update)
+
         self._build_menu()
         self._build_ui()
         self.live_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.live_lbl)
         self._load(path or self._default_path())
+        if self.qs.value("check_updates", True, type=bool):
+            QTimer.singleShot(1500, lambda: self.check_updates(manual=False))
 
     # ---------------- setup ----------------
     def _default_path(self) -> Path | None:
@@ -480,6 +517,15 @@ class MainWindow(QMainWindow):
             v.addAction(a)
         h = self.menuBar().addMenu("&Help")
         h.addAction("About the score", self._about_score)
+        h.addSeparator()
+        h.addAction("Check for &updates now", lambda: self.check_updates(manual=True))
+        self.auto_update_act = QAction("Check for updates on start", self, checkable=True,
+                                       checked=self.qs.value("check_updates", True, type=bool))
+        self.auto_update_act.toggled.connect(lambda on: self.qs.setValue("check_updates", on))
+        h.addAction(self.auto_update_act)
+        h.addAction("&Releases on GitHub", lambda: QDesktopServices.openUrl(QUrl(updates.RELEASES_URL)))
+        h.addSeparator()
+        h.addAction(f"&About {APP_NAME}", self._about)
 
     def _build_ui(self):
         split = QSplitter()
@@ -509,6 +555,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 4, 8)
+        lay.addWidget(self._build_brand())
 
         g = QGroupBox("Log file")
         gl = QVBoxLayout(g)
@@ -589,6 +636,83 @@ class MainWindow(QMainWindow):
         sb = QDoubleSpinBox(minimum=lo, maximum=hi, value=val, singleStep=step, decimals=0)
         form.addRow(label, sb)
         return sb
+
+    def _build_brand(self) -> QWidget:
+        """Logo, name, version and the quiet update note (like MailTool's)."""
+        w = QWidget()
+        row = QHBoxLayout(w)
+        row.setContentsMargins(4, 0, 0, 6)
+        logo = QLabel()
+        pm = asset_pixmap("icon_128.png")
+        if not pm.isNull():
+            dpr = self.devicePixelRatioF()
+            pm = pm.scaled(int(40 * dpr), int(40 * dpr), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pm.setDevicePixelRatio(dpr)
+            logo.setPixmap(pm)
+        row.addWidget(logo)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        col.addWidget(QLabel(APP_NAME, objectName="brandName"))
+        ver = QHBoxLayout()
+        ver.setSpacing(0)
+        ver.addWidget(QLabel(f"v{__version__}", objectName="brandVersion"))
+        self.update_lbl = QLabel(objectName="brandVersion")
+        self.update_lbl.setTextFormat(Qt.RichText)
+        self.update_lbl.setOpenExternalLinks(True)
+        ver.addWidget(self.update_lbl)
+        ver.addStretch(1)
+        col.addLayout(ver)
+        row.addLayout(col, 1)
+        return w
+
+    # ---------------- updates ----------------
+    def check_updates(self, manual: bool):
+        if manual:
+            self.update_lbl.setText("&nbsp;·&nbsp;checking…")
+        relay = self._update_relay
+        updates.check_async(lambda info: relay.done.emit(info, manual))
+
+    def _show_update(self, info: dict, manual: bool):
+        self.update_info = info
+        if info["status"] == "available":
+            self.update_lbl.setText(f"&nbsp;·&nbsp;<a href='{info['url']}' style='color:{self.theme.notice_text}; "
+                                    f"text-decoration:none'>v{info['latest']} available</a>")
+            self.update_lbl.setToolTip(f"Open the v{info['latest']} release page")
+            self.statusBar().showMessage(f"{APP_NAME} v{info['latest']} is available (you have "
+                                         f"v{info['current']}). Help ▸ Releases on GitHub", 15000)
+            if manual:
+                if QMessageBox.question(self, "Update available",
+                                        f"Version {info['latest']} is available. You have {info['current']}."
+                                        "\n\nOpen the release page?") == QMessageBox.Yes:
+                    QDesktopServices.openUrl(QUrl(info["url"]))
+        elif info["status"] == "current":
+            self.update_lbl.setText("&nbsp;·&nbsp;up to date")
+            self.update_lbl.setToolTip("")
+            if manual:
+                QMessageBox.information(self, "No updates", f"You have the latest version ({info['current']}).")
+        else:
+            self.update_lbl.setText("")
+            if manual:
+                QMessageBox.warning(self, "Update check failed",
+                                    "Couldn't get the latest release from GitHub (offline, or no release "
+                                    f"published yet).\n\nReleases: {updates.RELEASES_URL}")
+
+    def _about(self):
+        box = QMessageBox(self)
+        box.setWindowTitle(f"About {APP_NAME}")
+        pm = asset_pixmap("icon_128.png")
+        if not pm.isNull():
+            box.setIconPixmap(pm.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        note = ""
+        if self.update_info and self.update_info["status"] == "available":
+            note = (f"<p><a href='{self.update_info['url']}'>Version {self.update_info['latest']} "
+                    f"is available</a></p>")
+        box.setTextFormat(Qt.RichText)
+        box.setText(f"<h3 style='margin-bottom:2px'>{APP_NAME}</h3><p>Version {__version__}</p>{note}"
+                    "<p>Dashboard and report for the landing log written by the LandingRate.lua "
+                    "FlyWithLua script in X-Plane.</p>"
+                    f"<p><a href='https://github.com/{updates.REPO}'>github.com/{updates.REPO}</a></p>")
+        box.exec()
 
     def _build_overview(self) -> QWidget:
         w = QWidget()
@@ -946,6 +1070,8 @@ class MainWindow(QMainWindow):
         apply_qt_theme(QApplication.instance(), self.theme)
         for m in (self.card_model, self.sess_model, self.land_model, self.fl_model):
             m.muted_color = QColor(self.theme.muted)
+        if self.update_info:
+            self._show_update(self.update_info, False)
         self.refresh()
 
     # ---------------- Overview ----------------
@@ -1681,15 +1807,21 @@ def self_test() -> int:
         sample.write_log(log, n=300)
         app = QApplication.instance() or QApplication(sys.argv[:1])
         # throwaway settings so a test run never touches the user's last log, theme, etc.
-        w = MainWindow(log, QSettings(str(Path(d) / "selftest.ini"), QSettings.IniFormat))
+        qs = QSettings(str(Path(d) / "selftest.ini"), QSettings.IniFormat)
+        qs.setValue("check_updates", False)  # no network in CI
+        w = MainWindow(log, qs)
         w.resize(1400, 900)
         w.show()
         for i in range(w.tabs.count()):
             w.tabs.setCurrentIndex(i)
             app.processEvents()
         n = len(w.sel)
+        icon_ok = not asset_pixmap("icon_256.png").isNull()
         w.close()
-    print(f"self-test ok: {n} landings, {w.tabs.count()} tabs drawn")
+    if not icon_ok:
+        print("self-test FAILED: bundled icon assets are missing")
+        return 1
+    print(f"self-test ok: {n} landings, {w.tabs.count()} tabs drawn, icons bundled")
     return 0 if n else 1
 
 
@@ -1698,7 +1830,7 @@ def main(argv=None):
     if argv[:1] == ["report"]:
         return lra.main(argv[1:])
     if argv[:1] in (["--version"], ["-V"]):
-        print(f"Landing Rate Insights {__version__}")
+        print(f"{APP_NAME} {__version__}")
         return 0
     if argv[:1] == ["--self-test"]:
         return self_test()
@@ -1706,8 +1838,10 @@ def main(argv=None):
         print(__doc__)
         return 0
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("Landing Rate Insights")
+    app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
+    app.setDesktopFileName("landingrate-insights")
+    app.setWindowIcon(app_icon())
     w = MainWindow(Path(argv[0]) if argv else None)
     w.show()
     return app.exec()
