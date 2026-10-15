@@ -66,3 +66,19 @@ def test_spearman_matches_pandas():
     b = a * 0.4 + pd.Series(r.normal(size=200))
     a[3] = np.nan
     assert abs(lra.spearman(a, b) - a.corr(b, method="spearman")) < 1e-12
+
+
+def test_points_lost_and_random_tip():
+    import numpy as np
+    df = pd.DataFrame({"vs": [-100.0, -500.0, -30.0], "g": [1.0, 1.5, 1.0], "q": [0.5, 3.0, 0.5],
+                       "qrad": [0.0, 0.0, 0.0]})
+    lost = lra.points_lost(df)
+    assert set(lost) >= {"vs", "g", "flare", "vs_firm", "vs_soft"}
+    assert abs(lost["vs"] - (lost["vs_firm"] + lost["vs_soft"])) < 1e-9
+    assert lost["vs_firm"] > lost["vs_soft"] > 0
+    assert lra.points_lost(df.iloc[:0]) == {}
+    rng = np.random.default_rng(0)
+    first = lra.random_tip(lost, rng)
+    assert lra.random_tip(lost, rng, avoid=first) is not first
+    assert all(t.area in lra.TIP_AREAS for t in lra.TIPS)
+    assert "{" not in "".join(lra.tip_text(t) for t in lra.TIPS)

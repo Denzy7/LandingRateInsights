@@ -14,6 +14,7 @@ Tabs
 - Landings   every log entry with exclusion flags; click one for a full breakdown
 - Logbook    X-Plane's pilot logbook matched to the Lua log: airports, night, cloud, circuits,
              flight length, and landings the Lua missed
+- Tips       where your score points go, and how to win them back (a random tip sits in the sidebar)
 
 Hover any chart point for details; click a point to open that landing.
 Live mode watches the log and refreshes as soon as the Lua script writes a new landing.
@@ -35,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import (QAbstractTableModel, QDate, QFileSystemWatcher, QModelIndex, QObject, QSettings,
+from PySide6.QtCore import (QAbstractTableModel, QDate, QEvent, QFileSystemWatcher, QModelIndex, QObject, QSettings,
                             QSortFilterProxyModel, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDesktopServices, QGuiApplication, QIcon,
                            QPalette, QPixmap)
@@ -441,9 +442,37 @@ def make_table(model: FrameModel) -> tuple[QTableView, QSortFilterProxyModel]:
     return view, proxy
 
 
+class FitPage(QWidget):
+    """Holds a tab page inside its scroll area, so the page fits the window and only scrolls once the
+    window is smaller than the page's minimum size. Given the page directly, the scroll area grows it
+    to its preferred height whenever any word-wrapped label makes its layout height-for-width."""
+
+    def __init__(self, page: QWidget):
+        super().__init__()
+        self.page = page
+        page.setParent(self)
+        page.installEventFilter(self)
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.LayoutRequest:  # the page's minimum size may have changed
+            self.updateGeometry()
+        return False
+
+    def minimumSizeHint(self):
+        return self.page.minimumSizeHint()
+
+    def sizeHint(self):
+        return self.page.minimumSizeHint()
+
+    def resizeEvent(self, e):
+        self.page.setGeometry(self.rect())
+        super().resizeEvent(e)
+
+
 # ----------------------------------------------------------------------
 # Main window
 # ----------------------------------------------------------------------
+TIPS_TAB = 7  # index of the Tips tab
 DATE_PRESETS = ["All time", "Last 7 days", "Last 30 days", "Last 90 days", "Last 365 days", "This year", "Custom"]
 
 
@@ -452,7 +481,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
-        self.resize(1500, 950)
+        # 1500x950, or the whole screen when it's smaller (e.g. 1366x768), leaving room for the title bar
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        self.resize(min(1500, avail.width()), min(950, avail.height() - 40))
         self.qs = qs or QSettings("LandingRateInsights", "dashboard")
         self.settings = lra.Settings()
         self.raw = pd.DataFrame()
@@ -480,6 +511,7 @@ class MainWindow(QMainWindow):
         self.prefetch_timer = QTimer(self, singleShot=True, interval=250, timeout=self._prefetch)
 
         self.update_info = None
+        self.tip = None
         self._update_relay = _UpdateRelay(self)
         self._update_relay.done.connect(self._show_update)
 
@@ -488,6 +520,8 @@ class MainWindow(QMainWindow):
         self.live_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.live_lbl)
         self._load(path or self._default_path())
+        if self.tip is None:  # no log loaded: show an unweighted tip
+            self._new_tip()
         if self.qs.value("check_updates", True, type=bool):
             QTimer.singleShot(1500, lambda: self.check_updates(manual=False))
 
@@ -531,17 +565,18 @@ class MainWindow(QMainWindow):
         split = QSplitter()
         split.addWidget(self._build_sidebar())
         self.tabs = QTabWidget(documentMode=True)
-        self.tabs.addTab(self._build_overview(), "Overview")
-        self.tabs.addTab(self._build_progress(), "Progress")
-        self.tabs.addTab(self._build_aircraft(), "Aircraft")
-        self.tabs.addTab(self._build_technique(), "Technique")
-        self.tabs.addTab(self._build_sessions(), "Sessions")
-        self.tabs.addTab(self._build_landings(), "Landings")
-        self.tabs.addTab(self._build_logbook(), "Logbook")
+        for page, name in [(self._build_overview(), "Overview"), (self._build_progress(), "Progress"),
+                           (self._build_aircraft(), "Aircraft"), (self._build_technique(), "Technique"),
+                           (self._build_sessions(), "Sessions"), (self._build_landings(), "Landings"),
+                           (self._build_logbook(), "Logbook"), (self._build_tips(), "Tips")]:
+            # On a small screen a page scrolls instead of squashing its charts below their minimum size.
+            scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
+            scroll.setWidget(FitPage(page))
+            self.tabs.addTab(scroll, name)
         self.tabs.currentChanged.connect(lambda _: self._draw_current())
         split.addWidget(self.tabs)
         split.setStretchFactor(1, 1)
-        split.setSizes([280, 1220])
+        split.setSizes([split.widget(0).minimumWidth(), 1220])
         self.setCentralWidget(split)
         # Redrawing every chart on each pixel of a drag is what makes it stutter: show a
         # guide line while dragging and lay out once on release. Never collapse a pane.
@@ -556,6 +591,16 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 4, 8)
         lay.addWidget(self._build_brand())
+
+        g = QGroupBox("Tip")
+        gl = QVBoxLayout(g)
+        self.tip_lbl = QLabel(wordWrap=True, textFormat=Qt.RichText)
+        gl.addWidget(self.tip_lbl)
+        row = QHBoxLayout()
+        row.addWidget(QPushButton("Another tip", clicked=self._new_tip))
+        row.addWidget(QPushButton("All tips", clicked=lambda: self.tabs.setCurrentIndex(TIPS_TAB)))
+        gl.addLayout(row)
+        lay.addWidget(g)
 
         g = QGroupBox("Log file")
         gl = QVBoxLayout(g)
@@ -628,7 +673,9 @@ class MainWindow(QMainWindow):
 
         scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
         scroll.setWidget(w)
-        scroll.setMinimumWidth(260)
+        # Never scroll sideways: be at least as wide as the contents plus the vertical scrollbar.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(max(260, w.minimumSizeHint().width() + scroll.verticalScrollBar().sizeHint().width()))
         return scroll
 
     @staticmethod
@@ -1001,6 +1048,7 @@ class MainWindow(QMainWindow):
             msg = (f"New landing: {r['aircraft']} {r['vs']:+.0f} fpm · {r['rating']} · score {r['score']:.0f}"
                    + (f" · better than {pct:.0f}% of your {r['aircraft']} landings" if pct == pct else ""))
             self.live_lbl.setText(f"{r['time']:%H:%M}  {msg}")
+            self._new_tip()
             self.tabs.setCurrentIndex(0)
 
     # ---------------- filtering ----------------
@@ -1024,13 +1072,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(self.sel)} landings analysed · {n_excl} excluded · "
                                      f"{len(self.all)} entries in log")
         self._fill_focus()
+        if self.tip is None:
+            self._new_tip()
         self._dirty = set(range(self.tabs.count()))
         self._draw_current()
 
     def _draw_tab(self, i: int):
         self._dirty.discard(i)
         [self.draw_overview, self.draw_progress, self.draw_aircraft, self.draw_technique,
-         self.draw_sessions, self._fill_landings, self.draw_logbook][i]()
+         self.draw_sessions, self._fill_landings, self.draw_logbook, self.draw_tips][i]()
 
     def _draw_current(self):
         if self.all.empty:
@@ -1072,6 +1122,7 @@ class MainWindow(QMainWindow):
             m.muted_color = QColor(self.theme.muted)
         if self.update_info:
             self._show_update(self.update_info, False)
+        self._show_tip()
         self.refresh()
 
     # ---------------- Overview ----------------
@@ -1778,6 +1829,65 @@ class MainWindow(QMainWindow):
                     "airport", "flight_hours", "night", "imc"]
             self.sel[cols].to_csv(fn, index=False)
             self.statusBar().showMessage(f"Exported {len(self.sel)} landings to {fn}", 8000)
+
+    # ---------------- Tips ----------------
+    def _build_tips(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        self.tips_view = QTextBrowser(openExternalLinks=False)
+        lay.addWidget(panel("How to improve your score", "Where the landings currently shown lose points, "
+                                                         "then tips for each part of the score",
+                            self.tips_view), 1)
+        return w
+
+    def _new_tip(self):
+        lost = lra.points_lost(self.sel, self.settings) if len(self.sel) else None
+        self.tip = lra.random_tip(lost, avoid=self.tip)
+        self._show_tip()
+
+    def _show_tip(self):
+        if self.tip is None:
+            return
+        t = self.theme
+        area = lra.TIP_AREAS[self.tip.area][0]
+        self.tip_lbl.setText(f"<span style='color:{t.muted}'>{area}</span><br><b>{self.tip.title}</b>"
+                             f"<br><span style='color:{t.ink2}'>{lra.tip_text(self.tip, self.settings)}</span>")
+
+    def draw_tips(self):
+        t, s = self.theme, self.settings
+        lost = lra.points_lost(self.sel, s)
+        parts = [f"<body style='color:{t.ink}; background:{t.surface}'>"]
+        order = [a for a in lra.TIP_AREAS if lra.TIP_AREAS[a][1]]
+        if lost:
+            order.sort(key=lambda a: -lost[a])
+            total = sum(lost[a] for a in order)
+            parts.append(f"<h3 style='margin:0 0 4px 0'>Where your points go</h3>"
+                         f"<p style='margin:0 0 8px 0; color:{t.ink2}'>Across {len(self.sel)} landings you "
+                         f"lose {total:.0f} of 100 points on average.</p><table cellspacing='0' cellpadding='3'>")
+            for a in order:
+                name, avail = lra.TIP_AREAS[a]
+                frac = lost[a] / avail
+                col = t.good_text if frac < 0.15 else t.critical if frac > 0.4 else t.notice_text
+                bar = "█" * round(frac * 20) + f"<span style='color:{t.grid}'>{'█' * (20 - round(frac * 20))}</span>"
+                parts.append(f"<tr><td><b>{name}</b></td><td style='color:{t.ink2}'>&nbsp;−{lost[a]:.1f} of "
+                             f"{avail}&nbsp;</td><td style='color:{col}; font-family:monospace'>{bar}</td></tr>")
+            parts.append("</table>")
+            if lost["vs"] >= 1:
+                firm = lost["vs_firm"] >= lost["vs_soft"]
+                parts.append(f"<p style='margin:6px 0 0 0; color:{t.ink2}'>Most vertical-speed points go to "
+                             + (f"landing firmer than {s.target_firm:.0f} fpm." if firm else
+                                f"landing softer than {s.target_soft:.0f} fpm (floating)."))
+            parts.append(f"<p style='margin:6px 0 14px 0'>Biggest gain: <b>{lra.TIP_AREAS[order[0]][0]}</b>. "
+                         "Start with the tips below.</p>")
+        for a in order + ["practice"]:
+            name, avail = lra.TIP_AREAS[a]
+            sub = f" &nbsp;<span style='color:{t.muted}'>{avail} pts</span>" if avail else ""
+            parts.append(f"<h3 style='margin:10px 0 4px 0'>{name}{sub}</h3>")
+            for tip in lra.TIPS:
+                if tip.area == a:
+                    parts.append(f"<p style='margin:0 0 2px 0'><b>{tip.title}</b></p>"
+                                 f"<p style='margin:0 0 10px 0; color:{t.ink2}'>{lra.tip_text(tip, s)}</p>")
+        self.tips_view.setHtml("".join(parts) + "</body>")
 
     def _about_score(self):
         s = self.settings

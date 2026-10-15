@@ -43,3 +43,21 @@ def test_update_label(tmp_path):
     w._show_update({"status": "error", "current": "1.0.0", "latest": "", "url": ""}, False)
     assert w.update_lbl.text() == ""
     w.close()
+
+
+def test_tips_tab_and_sidebar_tip(tmp_path):
+    from PySide6.QtCore import QSettings
+    from landingrate import sample
+    log = tmp_path / "LandingRate.log"
+    sample.write_log(log, n=60)
+    qs = QSettings(str(tmp_path / "t.ini"), QSettings.IniFormat)
+    qs.setValue("check_updates", False)
+    w = app.MainWindow(log, qs)
+    assert w.tabs.tabText(app.TIPS_TAB) == "Tips"
+    assert w.tip is not None and w.tip.title in w.tip_lbl.text()
+    first = w.tip
+    w._new_tip()
+    assert w.tip is not first
+    w.draw_tips()
+    assert "Where your points go" in w.tips_view.toPlainText()
+    w.close()

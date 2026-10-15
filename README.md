@@ -4,7 +4,9 @@ A desktop dashboard and text report for the landing log written by the **Landing
 FlyWithLua script in X-Plane. It also matches each landing against X-Plane's own pilot logbook
 (`Output/logbooks/X-Plane Pilot.txt`).
 
-Tabs: Overview · Progress · Aircraft · Technique · Sessions · Landings · Logbook. Hover a chart
+Tabs: Overview · Progress · Aircraft · Technique · Sessions · Landings · Logbook · Tips. The Tips
+tab shows where your landings lose score points and how to win them back, and the sidebar
+shows a random tip, weighted towards your weakest part of the score. Hover a chart
 point for details and click it to open that landing. In live mode the dashboard refreshes as
 soon as the Lua script logs a new landing.
 

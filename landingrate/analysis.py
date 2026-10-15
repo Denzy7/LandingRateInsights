@@ -559,6 +559,116 @@ def logbook_insights(df: pd.DataFrame, flights: pd.DataFrame | None = None) -> l
 
 
 # ----------------------------------------------------------------------
+# Tips - how to score better
+# ----------------------------------------------------------------------
+@dataclass
+class Tip:
+    area: str      # key of TIP_AREAS
+    title: str
+    text: str
+
+
+# area -> (heading, points available in the score; 0 = not a score component)
+TIP_AREAS = {
+    "vs": ("Vertical speed", 60),
+    "g": ("Touchdown G", 20),
+    "flare": ("Flare", 20),
+    "practice": ("Practice", 0),
+}
+
+TIPS = [
+    Tip("vs", "Get stable early",
+        "Be on speed, on the glide path and fully configured by 1000 ft (500 ft visual). Most hard "
+        "landings are decided long before the flare, by an approach that was never settled."),
+    Tip("vs", "Fly the PAPI",
+        "Two white, two red. High and you dive at the end; low and you drag it in with power. "
+        "Either way the sink rate at the flare is wrong."),
+    Tip("vs", "Nail the approach speed",
+        "Fly Vref/Vapp plus a gust additive, no more. Fast means a long float or a flat, nose-first "
+        "touchdown; slow means not enough energy to arrest the sink."),
+    Tip("vs", "Flare at the right height",
+        "Roughly 20–30 ft in an airliner and 10–15 ft in a light aircraft. Use the radio altimeter "
+        "callouts and start the flare on the same call every time."),
+    Tip("vs", "Don't chase butter",
+        "The score gives full vertical-speed marks from {firm} to {soft} fpm. Softer than {soft} "
+        "costs up to 15 pts because it usually means a float and a long landing."),
+    Tip("vs", "Thrust to idle on cue",
+        "Holding power through the flare makes you float; chopping it early drops you in. Retard at a "
+        "fixed height for the type (around 20–30 ft in most jets)."),
+    Tip("vs", "Look down the runway",
+        "In the flare, shift your eyes to the far end of the runway. It's the easiest way to judge "
+        "sink and height on a flat monitor."),
+    Tip("g", "Avoid the balloon-and-drop",
+        "A late pull makes the aircraft climb a little, lose speed and then sink onto the runway. "
+        "That last-second change in sink rate is what shows up as a G spike."),
+    Tip("g", "Don't hold it off until it stalls",
+        "Holding the nose up while the speed bleeds off ends with the aircraft dropping the last "
+        "few feet. Let it touch down while it still has some airspeed."),
+    Tip("g", "Wings level at contact",
+        "In a crosswind, kick out the crab with rudder and hold the upwind wing down with aileron. "
+        "A wing low or sideways drift at contact adds side load."),
+    Tip("g", "Spoilers after touchdown",
+        "Arm auto-spoilers and let them deploy on contact. Dumping lift in the air brings the "
+        "aircraft down hard."),
+    Tip("flare", "Smooth, then hold",
+        "Start the flare with a small, steady pull and then hold that attitude. Full flare points "
+        "need a pitch rate of 1 °/s or less at contact."),
+    Tip("flare", "No last-second yank",
+        "A pull at the last moment raises the nose as the mains touch. That costs flare points and "
+        "risks a tail strike."),
+    Tip("flare", "Read the flare grade",
+        "\"Early\" means you flared too high and floated; \"Late\" means you flared too low. The "
+        "Technique tab shows which one you do more in each type."),
+    Tip("flare", "Trim for the approach",
+        "Trim out the stick force at approach speed. Without the trim fight, a small even pull is "
+        "much easier."),
+    Tip("flare", "Tune your controls",
+        "Add a little response curve to pitch and keep the frame rate steady. Twitchy hardware and "
+        "stutters are a common cause of over-controlling in the flare."),
+    Tip("practice", "Stick with one type",
+        "Consistency comes from repetition. Fly 15+ landings in the same aircraft and watch its "
+        "learning curve on the Progress tab."),
+    Tip("practice", "Warm up with a circuit",
+        "The Sessions tab shows if your first landing of a session is worse. If it is, fly a quick "
+        "circuit first."),
+    Tip("practice", "Fly when you're fresh",
+        "The Habits chart shows your median VS by hour and weekday. Fly the landings that matter "
+        "when you're usually at your best."),
+    Tip("practice", "Go around if it's wrong",
+        "If you're unstable below 500 ft or after a big bounce, go around. One go-around costs less "
+        "than a HARD landing."),
+    Tip("practice", "Find your driver",
+        "Pick an aircraft on the Technique tab: the factor with the strongest ρ is the habit to "
+        "work on first."),
+]
+
+
+def tip_text(tip: Tip, s: Settings = Settings()) -> str:
+    return tip.text.format(firm=f"{s.target_firm:.0f}", soft=f"{s.target_soft:.0f}")
+
+
+def points_lost(df: pd.DataFrame, s: Settings = Settings()) -> dict:
+    """Mean points lost per score component (vs /60, g /20, flare /20) over these landings.
+    Also splits the VS loss into 'vs_firm' and 'vs_soft' (too soft, i.e. floaty)."""
+    if df.empty:
+        return {}
+    vs_pts, g_pts, flare_pts = score_parts(df["vs"], df["g"], df["q"], df["qrad"], s)
+    vs_loss = 60 - vs_pts
+    soft = df["vs"].to_numpy() > s.target_soft
+    return {"vs": float(vs_loss.mean()), "g": float((20 - g_pts).mean()), "flare": float((20 - flare_pts).mean()),
+            "vs_firm": float(np.where(soft, 0, vs_loss).mean()), "vs_soft": float(np.where(soft, vs_loss, 0).mean())}
+
+
+def random_tip(lost: dict | None = None, rng=None, avoid: Tip | None = None) -> Tip:
+    """A random tip, weighted towards the score component that costs the most points."""
+    rng = rng or np.random.default_rng()
+    pool = [t for t in TIPS if t is not avoid] or TIPS
+    lost = lost or {}
+    w = np.array([1 + lost.get(t.area, 0) for t in pool], dtype=float)
+    return pool[rng.choice(len(pool), p=w / w.sum())]
+
+
+# ----------------------------------------------------------------------
 # Insights - plain-language findings
 # ----------------------------------------------------------------------
 @dataclass
